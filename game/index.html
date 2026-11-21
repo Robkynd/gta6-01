@@ -3,17 +3,59 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Block Dodger</title>
+<title>Neon Bay — Open-World Crime Game</title>
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #11141b; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1210; font-family: "Segoe UI", Arial, sans-serif; }
   #game { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
-  /* Read aloud, never shown: the status line screen readers announce. */
   #status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .hud { position: fixed; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.8); z-index: 5; pointer-events: none; user-select: none; }
+  #hud-top-left { top: 14px; left: 16px; }
+  #hud-health { width: 180px; height: 14px; border: 2px solid #fff; background: rgba(0,0,0,.45); }
+  #hud-health-fill { height: 100%; width: 100%; background: linear-gradient(90deg, #37d67a, #a5e34d); }
+  #hud-cash { margin-top: 6px; font-size: 20px; font-weight: 700; color: #7dff9a; }
+  #hud-wanted { top: 12px; left: 50%; transform: translateX(-50%); font-size: 30px; letter-spacing: 4px; color: #ffd23e; }
+  #hud-wanted .dim { color: rgba(255,255,255,.25); }
+  #hud-minimap { top: 14px; right: 16px; border: 2px solid rgba(255,255,255,.7); background: rgba(0,0,0,.45); }
+  #hud-objective { left: 16px; bottom: 52px; font-size: 16px; background: rgba(0,0,0,.5); padding: 8px 12px; border-left: 4px solid #ff9a3d; max-width: 420px; }
+  #hud-speed { right: 16px; bottom: 16px; font-size: 26px; font-weight: 700; text-align: right; }
+  #hud-speed small { font-size: 13px; color: #ffd9a0; display: block; }
+  #hud-hint { left: 50%; bottom: 14px; transform: translateX(-50%); font-size: 13px; color: rgba(255,255,255,.75); }
+  #start-screen { position: fixed; inset: 0; z-index: 10; display: flex; flex-direction: column; align-items: center; justify-content: center; background: linear-gradient(180deg, rgba(20,8,20,.55), rgba(255,122,26,.35)); color: #fff; text-align: center; }
+  #start-screen h1 { font-size: 64px; margin: 0; letter-spacing: 6px; color: #ffb347; text-shadow: 0 0 24px rgba(255,140,0,.8), 0 3px 0 #7a2d00; }
+  #start-screen h2 { font-size: 20px; margin: 8px 0 4px; font-weight: 400; color: #ffe9c9; }
+  #start-screen p { max-width: 560px; line-height: 1.5; margin: 10px 0; }
+  #start-screen .controls { font-size: 14px; background: rgba(0,0,0,.45); padding: 10px 18px; border-radius: 8px; }
+  #start-button { margin-top: 18px; font-size: 22px; font-weight: 700; padding: 12px 42px; border: none; border-radius: 8px; background: #ff7a1a; color: #fff; cursor: pointer; box-shadow: 0 4px 0 #a34d00; }
+  #start-button:hover { background: #ff8c33; }
 </style>
+<script type="importmap">
+{ "imports": { "three": "./vendor/three.module.min.js" } }
+</script>
 </head>
 <body>
-<canvas id="game" aria-label="Block Dodger: move the paddle left and right to dodge falling blocks and catch coins"></canvas>
+<canvas id="game" aria-label="Neon Bay: explore the city on foot, drive cars, dodge the police"></canvas>
 <p id="status" role="status" aria-live="polite"></p>
+
+<div id="hud-top-left" class="hud">
+  <div id="hud-health"><div id="hud-health-fill"></div></div>
+  <div id="hud-cash">$ 0</div>
+</div>
+<div id="hud-wanted" class="hud"><span class="dim">★★★★★</span></div>
+<canvas id="hud-minimap" class="hud" width="180" height="180"></canvas>
+<div id="hud-objective" class="hud">NEON BAY — explore the city. Find a car and drive.</div>
+<div id="hud-speed" class="hud"><span id="hud-speed-value">0</span><small id="hud-speed-label">ON FOOT</small></div>
+<div id="hud-hint" class="hud">WASD move &nbsp;·&nbsp; mouse drag camera &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; P pause</div>
+
+<div id="start-screen">
+  <h1>NEON BAY</h1>
+  <h2>An open-world crime story — by the Neon Bay crew</h2>
+  <p>You are <b>Rex Marlowe</b>, a courier who just lifted a package the Marlin Cartel wants back.
+  Lose them in the streets of Neon Bay, a sun-soaked coastal city of palm-lined avenues,
+  and deliver the package before the sun goes down.</p>
+  <p class="controls">WASD — walk / drive &nbsp;·&nbsp; Mouse drag — camera &nbsp;·&nbsp; E — enter / exit car &nbsp;·&nbsp; Space — brake &nbsp;·&nbsp; P — pause</p>
+  <button id="start-button">START THE JOB</button>
+</div>
+
 <script type="module" src="./src/main.js"></script>
 </body>
 </html>
