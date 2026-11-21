@@ -25,8 +25,10 @@
   #start-screen h2 { font-size: 20px; margin: 8px 0 4px; font-weight: 400; color: #ffe9c9; }
   #start-screen p { max-width: 560px; line-height: 1.5; margin: 10px 0; }
   #start-screen .controls { font-size: 14px; background: rgba(0,0,0,.45); padding: 10px 18px; border-radius: 8px; }
-  #start-button { margin-top: 18px; font-size: 22px; font-weight: 700; padding: 12px 42px; border: none; border-radius: 8px; background: #ff7a1a; color: #fff; cursor: pointer; box-shadow: 0 4px 0 #a34d00; }
+  #start-button, #continue-button { margin-top: 18px; font-size: 22px; font-weight: 700; padding: 12px 42px; border: none; border-radius: 8px; background: #ff7a1a; color: #fff; cursor: pointer; box-shadow: 0 4px 0 #a34d00; }
   #start-button:hover { background: #ff8c33; }
+  #continue-button { background: #2a6fd6; box-shadow: 0 4px 0 #174a8a; }
+  #continue-button:hover { background: #3a7fe6; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js" } }
@@ -44,7 +46,7 @@
 <canvas id="hud-minimap" class="hud" width="180" height="180"></canvas>
 <div id="hud-objective" class="hud">NEON BAY — explore the city. Find a car and drive.</div>
 <div id="hud-speed" class="hud"><span id="hud-speed-value">0</span><small id="hud-speed-label">ON FOOT</small></div>
-<div id="hud-hint" class="hud">WASD move &nbsp;·&nbsp; mouse drag camera &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; P pause</div>
+<div id="hud-hint" class="hud">WASD move &nbsp;·&nbsp; mouse drag camera &nbsp;·&nbsp; E enter car &nbsp;·&nbsp; Click punch / shoot &nbsp;·&nbsp; M mute &nbsp;·&nbsp; P pause</div>
 
 <div id="start-screen">
   <h1>NEON BAY</h1>
@@ -54,6 +56,7 @@
   and deliver the package before the sun goes down.</p>
   <p class="controls">WASD — walk / drive &nbsp;·&nbsp; Mouse drag — camera &nbsp;·&nbsp; E — enter / exit car &nbsp;·&nbsp; Space — brake &nbsp;·&nbsp; P — pause</p>
   <button id="start-button">START THE JOB</button>
+  <button id="continue-button" style="display:none">CONTINUE</button>
 </div>
 
 <script type="module" src="./src/main.js"></script>
