@@ -1,134 +1,319 @@
-// Boot and the one loop: input is read every frame, the world advances in fixed 1/60 s steps
-// (several in a slow frame, none in a fast one), and the renderer paints what is there. The game
-// moves between four screens: title, play, paused and game over.
-//
-// ?seed=N fixes the falling pattern. ?shot=start|play|end (with &seed=N) stages that scene
-// instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
-import { BEST_KEY, LIVES, STEP } from './config.js';
-import { createRandom } from './random.js';
-import { createWorld, EVENT_HIT, EVENT_OVER } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
-import { createRenderer, SCREEN_OVER, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE } from './render.js';
-import { stageShot } from './shots.js';
+// Neon Bay boot and game loop: builds the renderer and the city, walks the player
+// (Rex Marlowe) through it in third person, and paints the HUD and minimap.
+// ?shot=city stages a cinematic view of the city for screenshots and sets
+// window.__shotReady once it has painted; ?shot=start|play|end map to the same view.
 
-/** The longest frame the loop catches up on; a longer stall (a hidden tab) is dropped, not replayed. */
+import * as THREE from 'three';
+import { buildCity } from './city.js';
+import { ACTION_CONFIRM, ACTION_ENTER_CAR, ACTION_PAUSE, createInput } from './input.js';
+
+const STEP = 1 / 60;
 const MAX_FRAME = 0.25;
+const WALK_SPEED = 6; // metres per second on foot
+const PLAYER_RADIUS = 0.6;
 
 const params = new URLSearchParams(window.location.search);
 const shot = params.get('shot');
 const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : Math.floor(Math.random() * 4294967296);
+const seed = Number.isInteger(seedParam) ? seedParam : 1337;
 
 const canvas = document.getElementById('game');
-const status = document.getElementById('status');
-const world = createWorld(createRandom(seed));
-const renderer = createRenderer(canvas);
+const statusEl = document.getElementById('status');
+const startScreen = document.getElementById('start-screen');
+const startButton = document.getElementById('start-button');
+const healthFill = document.getElementById('hud-health-fill');
+const cashEl = document.getElementById('hud-cash');
+const wantedEl = document.getElementById('hud-wanted');
+const minimap = document.getElementById('hud-minimap');
+const minimapCtx = minimap.getContext('2d');
+const objectiveEl = document.getElementById('hud-objective');
+const speedValue = document.getElementById('hud-speed-value');
+const speedLabel = document.getElementById('hud-speed-label');
 
-function readBest() {
-  try {
-    return Number.parseInt(window.localStorage.getItem(BEST_KEY) ?? '0', 10) || 0;
-  } catch {
-    return 0;
-  }
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 900);
+
+const city = buildCity(scene, seed);
+
+// Rex Marlowe on foot: a capsule in an orange courier jacket with a dark cap.
+const playerMat = new THREE.MeshLambertMaterial({ color: 0xff7a1a });
+const playerMesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.45, 1.0, 4, 10), playerMat);
+playerMesh.position.set(city.spawn.x, 1.05, city.spawn.z);
+scene.add(playerMesh);
+const capMat = new THREE.MeshLambertMaterial({ color: 0x22242a });
+const cap = new THREE.Mesh(new THREE.SphereGeometry(0.3, 10, 8), capMat);
+cap.position.y = 0.95;
+playerMesh.add(cap);
+
+const state = {
+  screen: 'title', // title | play | paused
+  health: 100,
+  cash: 0,
+  wanted: 0,
+  heading: city.spawn.heading, // direction Rex faces, radians around Y
+  camYaw: city.spawn.heading + Math.PI, // camera looks back at Rex from behind
+  camPitch: 0.32,
+  speed: 0,
+};
+
+const input = createInput(canvas);
+
+function announce(message) {
+  statusEl.textContent = message;
 }
 
-function saveBest(value) {
-  try {
-    window.localStorage.setItem(BEST_KEY, String(value));
-  } catch {
-    // Storage can be off (private windows): the best score then lasts this visit only.
+function setWanted(level) {
+  state.wanted = level;
+  let stars = '';
+  for (let i = 0; i < 5; i += 1) {
+    stars += i < level
+      ? '<span>★</span>'
+      : '<span class="dim">★</span>';
   }
+  wantedEl.innerHTML = stars;
 }
 
-function runShot(name) {
-  const scene = stageShot(name, world);
-  let painted = 0;
-  function paint() {
-    renderer.draw(world.state, scene.screen, scene.best);
-    painted += 1;
-    if (painted < 2) requestAnimationFrame(paint);
-    else window.__shotReady = true;
+function setObjective(text) {
+  objectiveEl.textContent = text;
+}
+
+function collide(x, z) {
+  // Push the player circle out of every building footprint it overlaps.
+  for (const box of city.colliders) {
+    const nearestX = Math.max(box.minX, Math.min(x, box.maxX));
+    const nearestZ = Math.max(box.minZ, Math.min(z, box.maxZ));
+    const dx = x - nearestX;
+    const dz = z - nearestZ;
+    const distSq = dx * dx + dz * dz;
+    if (distSq < PLAYER_RADIUS * PLAYER_RADIUS) {
+      if (distSq > 0.0001) {
+        const dist = Math.sqrt(distSq);
+        x = nearestX + (dx / dist) * PLAYER_RADIUS;
+        z = nearestZ + (dz / dist) * PLAYER_RADIUS;
+      } else {
+        // Dead centre inside a footprint: shove out along the shortest side.
+        const pushLeft = x - box.minX;
+        const pushRight = box.maxX - x;
+        const pushBack = z - box.minZ;
+        const pushFront = box.maxZ - z;
+        const min = Math.min(pushLeft, pushRight, pushBack, pushFront);
+        if (min === pushLeft) x = box.minX - PLAYER_RADIUS;
+        else if (min === pushRight) x = box.maxX + PLAYER_RADIUS;
+        else if (min === pushBack) z = box.minZ - PLAYER_RADIUS;
+        else z = box.maxZ + PLAYER_RADIUS;
+      }
+    }
   }
-  requestAnimationFrame(paint);
+  const limit = city.half + 30;
+  x = Math.max(-city.half - 6, Math.min(limit, x));
+  z = Math.max(-city.half - 6, Math.min(city.half + 6, z));
+  return { x, z };
+}
+
+function step(dt) {
+  const drag = input.takeDrag();
+  state.camYaw -= drag.x * 0.005;
+  state.camPitch = Math.max(0.05, Math.min(1.1, state.camPitch + drag.y * 0.004));
+
+  const move = input.move();
+  const forwardX = Math.sin(state.camYaw);
+  const forwardZ = Math.cos(state.camYaw);
+  const rightX = Math.cos(state.camYaw);
+  const rightZ = -Math.sin(state.camYaw);
+  let mx = forwardX * move.forward + rightX * move.strafe;
+  let mz = forwardZ * move.forward + rightZ * move.strafe;
+  const len = Math.hypot(mx, mz);
+  if (len > 0) {
+    mx /= len;
+    mz /= len;
+    const pos = collide(
+      playerMesh.position.x + mx * WALK_SPEED * dt,
+      playerMesh.position.z + mz * WALK_SPEED * dt,
+    );
+    playerMesh.position.x = pos.x;
+    playerMesh.position.z = pos.z;
+    state.speed = WALK_SPEED;
+    // Turn Rex to face where he walks, smoothly.
+    const target = Math.atan2(mx, mz);
+    let diff = target - state.heading;
+    while (diff > Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    state.heading += diff * Math.min(1, dt * 12);
+  } else {
+    state.speed = 0;
+  }
+  playerMesh.rotation.y = state.heading;
+}
+
+function updateCamera(dt) {
+  const target = new THREE.Vector3(
+    playerMesh.position.x,
+    playerMesh.position.y + 1.4,
+    playerMesh.position.z,
+  );
+  const distance = 9;
+  const height = Math.sin(state.camPitch) * distance;
+  const flat = Math.cos(state.camPitch) * distance;
+  const desired = new THREE.Vector3(
+    target.x - Math.sin(state.camYaw) * flat,
+    target.y + height,
+    target.z - Math.cos(state.camYaw) * flat,
+  );
+  camera.position.lerp(desired, Math.min(1, dt * 8));
+  camera.lookAt(target);
+}
+
+function drawMinimap() {
+  const size = 180;
+  const worldMinX = -city.half - 10;
+  const worldMaxX = city.half + 160;
+  const worldMinZ = -city.half - 10;
+  const worldMaxZ = city.half + 10;
+  const scaleX = size / (worldMaxX - worldMinX);
+  const scaleZ = size / (worldMaxZ - worldMinZ);
+  const toMapX = (x) => (x - worldMinX) * scaleX;
+  const toMapZ = (z) => (z - worldMinZ) * scaleZ;
+
+  minimapCtx.fillStyle = 'rgba(20, 24, 30, 0.9)';
+  minimapCtx.fillRect(0, 0, size, size);
+  // The bay, east.
+  minimapCtx.fillStyle = '#1a6f8e';
+  minimapCtx.fillRect(toMapX(city.half + 26), 0, size - toMapX(city.half + 26), size);
+  // Roads.
+  minimapCtx.strokeStyle = '#5a5f68';
+  minimapCtx.lineWidth = 3;
+  for (const c of city.roads) {
+    minimapCtx.beginPath();
+    minimapCtx.moveTo(toMapX(c), 0);
+    minimapCtx.lineTo(toMapX(c), size);
+    minimapCtx.stroke();
+    minimapCtx.beginPath();
+    minimapCtx.moveTo(0, toMapZ(c));
+    minimapCtx.lineTo(size, toMapZ(c));
+    minimapCtx.stroke();
+  }
+  // Buildings.
+  minimapCtx.fillStyle = '#c9a86a';
+  for (const box of city.colliders) {
+    minimapCtx.fillRect(
+      toMapX(box.minX), toMapZ(box.minZ),
+      (box.maxX - box.minX) * scaleX, (box.maxZ - box.minZ) * scaleZ,
+    );
+  }
+  // Rex, as an arrow pointing where he faces.
+  const px = toMapX(playerMesh.position.x);
+  const pz = toMapZ(playerMesh.position.z);
+  minimapCtx.save();
+  minimapCtx.translate(px, pz);
+  minimapCtx.rotate(Math.atan2(Math.sin(state.heading), Math.cos(state.heading)) + Math.PI / 2);
+  minimapCtx.fillStyle = '#ff7a1a';
+  minimapCtx.beginPath();
+  minimapCtx.moveTo(0, -7);
+  minimapCtx.lineTo(5, 6);
+  minimapCtx.lineTo(-5, 6);
+  minimapCtx.closePath();
+  minimapCtx.fill();
+  minimapCtx.restore();
+}
+
+function updateHud() {
+  healthFill.style.width = `${state.health}%`;
+  cashEl.textContent = `$ ${state.cash.toLocaleString('en-US')}`;
+  speedValue.textContent = String(Math.round(state.speed * 3.6));
+  speedLabel.textContent = state.speed > 0 ? 'KM/H — ON FOOT' : 'ON FOOT';
+  drawMinimap();
+}
+
+function stageShot() {
+  // Cinematic postcard of Neon Bay: high over the central avenue at sunset, the bay
+  // to the east, towers lit, Rex small on the road below.
+  startScreen.style.display = 'none';
+  state.screen = 'play';
+  camera.position.set(-60, 55, 95);
+  camera.lookAt(40, 8, -10);
+  playerMesh.position.set(0, 1.05, 24);
+  setObjective('NEON BAY — the package is hot. Lose the cartel, make the delivery.');
+  setWanted(0);
+  updateHud();
+  renderer.render(scene, camera);
+  renderer.render(scene, camera);
+  window.__shotReady = true;
+}
+
+function startGame() {
+  startScreen.style.display = 'none';
+  state.screen = 'play';
+  setObjective('NEON BAY — explore the city. Find a car and drive.');
+  announce('Neon Bay. Walk with WASD, drag the mouse to look around.');
 }
 
 function runGame() {
-  const input = createInput(canvas);
-  let screen = SCREEN_TITLE;
-  let best = readBest();
   let accumulator = 0;
   let last = performance.now();
 
-  // Screen readers (and anyone watching the page's text) hear the screen changes and each hit.
-  function announce(message) {
-    status.textContent = message;
-  }
-
-  function startGame() {
-    world.reset();
-    accumulator = 0;
-    screen = SCREEN_PLAY;
-    announce(`Playing. ${LIVES} lives.`);
-  }
-
-  function endGame() {
-    screen = SCREEN_OVER;
-    if (world.state.score > best) {
-      best = world.state.score;
-      saveBest(best);
-    }
-    announce(`Game over. Score ${world.state.score}. Best ${best}.`);
-  }
-
-  function handleActions() {
-    const actions = input.takeActions();
-    if (actions & ACTION_CONFIRM && (screen === SCREEN_TITLE || screen === SCREEN_OVER)) startGame();
-    else if (actions & ACTION_PAUSE && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
-      announce('Paused.');
-    } else if (actions & (ACTION_PAUSE | ACTION_CONFIRM) && screen === SCREEN_PAUSED) {
-      screen = SCREEN_PLAY;
-      announce('Playing.');
-    }
-  }
-
-  function step() {
-    if (screen === SCREEN_TITLE) {
-      world.step(STEP, 0, true);
-      return;
-    }
-    const events = world.step(STEP, input.direction(), false);
-    if (events & EVENT_OVER) endGame();
-    else if (events & EVENT_HIT) announce(world.state.lives === 1 ? 'Hit. 1 life left.' : `Hit. ${world.state.lives} lives left.`);
-  }
+  startButton.addEventListener('click', startGame);
 
   function frame(now) {
     requestAnimationFrame(frame);
     accumulator += Math.min((now - last) / 1000, MAX_FRAME);
     last = now;
-    handleActions();
-    if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
-      while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) {
-        step();
+    const actions = input.takeActions();
+    if (actions & ACTION_CONFIRM && state.screen === 'title') startGame();
+    if (actions & ACTION_PAUSE) {
+      if (state.screen === 'play') {
+        state.screen = 'paused';
+        announce('Paused.');
+      } else if (state.screen === 'paused') {
+        state.screen = 'play';
+        announce('Playing.');
+      }
+    }
+    if (state.screen === 'play') {
+      while (accumulator >= STEP) {
+        step(STEP);
         accumulator -= STEP;
       }
+      updateCamera(1 / 60);
+      updateHud();
+      renderer.render(scene, camera);
+    } else if (state.screen === 'title') {
+      // Idle orbit behind the title screen so the city shows through.
+      const t = now / 1000;
+      camera.position.set(
+        Math.sin(t * 0.05) * 90,
+        42,
+        Math.cos(t * 0.05) * 90,
+      );
+      camera.lookAt(0, 6, 0);
+      renderer.render(scene, camera);
     } else {
       accumulator = 0;
     }
-    renderer.draw(world.state, screen, best);
   }
 
-  // Leaving the tab pauses a running game rather than letting blocks fall unseen.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && screen === SCREEN_PLAY) {
-      screen = SCREEN_PAUSED;
+    if (document.hidden && state.screen === 'play') {
+      state.screen = 'paused';
       announce('Paused.');
     }
   });
 
-  announce('Block Dodger. Press Space or click to start.');
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  setWanted(0);
+  updateHud(); // Paint the minimap once so it is filled behind the title screen too.
+  announce('Neon Bay. Press Start to play.');
   requestAnimationFrame(frame);
 }
 
-if (shot) runShot(shot);
+if (shot) stageShot();
 else runGame();
