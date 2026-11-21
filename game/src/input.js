@@ -7,6 +7,7 @@ export const ACTION_CONFIRM = 1 << 0;
 export const ACTION_PAUSE = 1 << 1;
 export const ACTION_ENTER_CAR = 1 << 2;
 export const ACTION_BRAKE = 1 << 3;
+export const ACTION_ATTACK = 1 << 4;
 
 const KEY_MAP = {
   KeyW: 'up', ArrowUp: 'up',
@@ -25,6 +26,10 @@ export function createInput(canvas) {
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
+  // Click (not drag) detection: a quick press with almost no movement is an attack.
+  let downX = 0;
+  let downY = 0;
+  let downTime = 0;
 
   window.addEventListener('keydown', (event) => {
     const dir = KEY_MAP[event.code];
@@ -52,6 +57,9 @@ export function createInput(canvas) {
     dragging = true;
     lastX = event.clientX;
     lastY = event.clientY;
+    downX = event.clientX;
+    downY = event.clientY;
+    downTime = performance.now();
   });
 
   window.addEventListener('mousemove', (event) => {
@@ -62,12 +70,21 @@ export function createInput(canvas) {
     lastY = event.clientY;
   });
 
-  window.addEventListener('mouseup', () => { dragging = false; });
+  window.addEventListener('mouseup', (event) => {
+    dragging = false;
+    if (performance.now() - downTime < 250
+      && Math.hypot(event.clientX - downX, event.clientY - downY) < 6) {
+      actions |= ACTION_ATTACK;
+    }
+  });
 
   canvas.addEventListener('touchstart', (event) => {
     dragging = true;
     lastX = event.touches[0].clientX;
     lastY = event.touches[0].clientY;
+    downX = event.touches[0].clientX;
+    downY = event.touches[0].clientY;
+    downTime = performance.now();
   }, { passive: true });
 
   canvas.addEventListener('touchmove', (event) => {
@@ -78,7 +95,14 @@ export function createInput(canvas) {
     lastY = event.touches[0].clientY;
   }, { passive: true });
 
-  canvas.addEventListener('touchend', () => { dragging = false; });
+  canvas.addEventListener('touchend', (event) => {
+    dragging = false;
+    const touch = event.changedTouches[0];
+    if (touch && performance.now() - downTime < 250
+      && Math.hypot(touch.clientX - downX, touch.clientY - downY) < 6) {
+      actions |= ACTION_ATTACK;
+    }
+  });
 
   return {
     // -1/0/1 along the camera-relative forward and right axes.
