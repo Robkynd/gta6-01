@@ -1,53 +1,105 @@
-// Keyboard and pointer input. Held keys give a steering direction; one-shot presses (start or
-// restart, pause) are queued as bit flags and taken once by the loop, so a press between two
-// frames is never lost and never counted twice.
+// Keyboard and mouse input for Neon Bay: WASD/arrows to move or drive, mouse drag to
+// orbit the camera, E to enter or exit a car, Space to brake, P or Escape to pause.
+// The input state is polled once per frame; edge-triggered actions are consumed with
+// takeActions() so a single key press never fires twice.
 
-export const ACTION_CONFIRM = 1;
-export const ACTION_PAUSE = 2;
+export const ACTION_CONFIRM = 1 << 0;
+export const ACTION_PAUSE = 1 << 1;
+export const ACTION_ENTER_CAR = 1 << 2;
+export const ACTION_BRAKE = 1 << 3;
 
-const LEFT = new Set(['ArrowLeft', 'KeyA']);
-const RIGHT = new Set(['ArrowRight', 'KeyD']);
-const CONFIRM = new Set(['Space', 'Enter']);
-const PAUSE = new Set(['KeyP', 'Escape']);
+const KEY_MAP = {
+  KeyW: 'up', ArrowUp: 'up',
+  KeyS: 'down', ArrowDown: 'down',
+  KeyA: 'left', ArrowLeft: 'left',
+  KeyD: 'right', ArrowRight: 'right',
+  Space: 'brake',
+};
 
-export function createInput(target) {
-  let left = false;
-  let right = false;
+export function createInput(canvas) {
+  const held = { up: false, down: false, left: false, right: false, brake: false };
   let actions = 0;
+  // Camera orbit deltas accumulate from mouse drags and are consumed by the loop.
+  let dragX = 0;
+  let dragY = 0;
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
 
   window.addEventListener('keydown', (event) => {
-    if (LEFT.has(event.code)) left = true;
-    else if (RIGHT.has(event.code)) right = true;
-    else if (CONFIRM.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_CONFIRM;
-    } else if (PAUSE.has(event.code)) {
-      if (!event.repeat) actions |= ACTION_PAUSE;
-    } else return;
-    event.preventDefault();
-  });
-  window.addEventListener('keyup', (event) => {
-    if (LEFT.has(event.code)) left = false;
-    else if (RIGHT.has(event.code)) right = false;
-  });
-  // A key released while the tab is hidden never sends keyup: let go of everything on blur.
-  window.addEventListener('blur', () => {
-    left = false;
-    right = false;
-  });
-  target.addEventListener('pointerdown', () => {
-    actions |= ACTION_CONFIRM;
+    const dir = KEY_MAP[event.code];
+    if (dir) {
+      held[dir] = true;
+      event.preventDefault();
+      return;
+    }
+    if (event.code === 'KeyE' && !event.repeat) actions |= ACTION_ENTER_CAR;
+    if ((event.code === 'KeyP' || event.code === 'Escape') && !event.repeat) actions |= ACTION_PAUSE;
+    if ((event.code === 'Space' || event.code === 'Enter') && !event.repeat) actions |= ACTION_CONFIRM;
   });
 
+  window.addEventListener('keyup', (event) => {
+    const dir = KEY_MAP[event.code];
+    if (dir) held[dir] = false;
+  });
+
+  window.addEventListener('blur', () => {
+    for (const key of Object.keys(held)) held[key] = false;
+    dragging = false;
+  });
+
+  canvas.addEventListener('mousedown', (event) => {
+    dragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+  });
+
+  window.addEventListener('mousemove', (event) => {
+    if (!dragging) return;
+    dragX += event.clientX - lastX;
+    dragY += event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+  });
+
+  window.addEventListener('mouseup', () => { dragging = false; });
+
+  canvas.addEventListener('touchstart', (event) => {
+    dragging = true;
+    lastX = event.touches[0].clientX;
+    lastY = event.touches[0].clientY;
+  }, { passive: true });
+
+  canvas.addEventListener('touchmove', (event) => {
+    if (!dragging) return;
+    dragX += event.touches[0].clientX - lastX;
+    dragY += event.touches[0].clientY - lastY;
+    lastX = event.touches[0].clientX;
+    lastY = event.touches[0].clientY;
+  }, { passive: true });
+
+  canvas.addEventListener('touchend', () => { dragging = false; });
+
   return {
-    /** -1 for left, 1 for right, 0 for neither or both. */
-    direction() {
-      return (right ? 1 : 0) - (left ? 1 : 0);
+    // -1/0/1 along the camera-relative forward and right axes.
+    move() {
+      return {
+        forward: (held.up ? 1 : 0) - (held.down ? 1 : 0),
+        strafe: (held.right ? 1 : 0) - (held.left ? 1 : 0),
+      };
     },
-    /** The one-shot presses since the last call, as ACTION_* flags. */
+    braking() { return held.brake; },
+    // Consumes the accumulated mouse drag since the last call (pixels).
+    takeDrag() {
+      const out = { x: dragX, y: dragY };
+      dragX = 0;
+      dragY = 0;
+      return out;
+    },
     takeActions() {
-      const taken = actions;
+      const out = actions;
       actions = 0;
-      return taken;
+      return out;
     },
   };
 }
